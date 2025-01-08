@@ -21,32 +21,65 @@ async function cekDNS(hostname) {
 }
 
 // Fungsi untuk mengecek apakah website diblokir
+// Fungsi untuk mengecek apakah website diblokir
 async function cekBlokir(targetUrl) {
-  try {
-    const response = await fetch(targetUrl, { 
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, seperti Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
-    });
-    
-    const body = await response.text();
-    
-    // Cek tanda-tanda pemblokiran
-    const isBlocked = 
-      response.status === 403 || // Forbidden
-      response.status === 451 || // Unavailable For Legal Reasons
-      body.toLowerCase().includes('internet positif') ||
-      body.toLowerCase().includes('trust+') ||
-      body.toLowerCase().includes('blocked') ||
-      body.toLowerCase().includes('diblokir');
-    
-    return isBlocked;
-  } catch (error) {
-    // Jika tidak bisa diakses sama sekali, kemungkinan diblokir
-    return true;
+    try {
+      const response = await fetch(targetUrl, { 
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, seperti Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+      });
+  
+      // Logging status dan URL yang diakses
+      console.log(`Mengakses: ${targetUrl} - Status: ${response.status}`);
+      
+      // Ambil URL akhir setelah semua redirect (jika ada)
+      const finalUrl = response.url;
+      console.log(`URL akhir: ${finalUrl}`);
+  
+      const body = await response.text();
+  
+      // Logging sebagian isi body untuk verifikasi
+      console.log(`Body snippet: ${body.substring(0, 200)}...`);
+  
+      // Membuat objek URL untuk memeriksa hostname awal dan akhir
+      const initialHostname = new URL(targetUrl).hostname;
+      const finalHostname = new URL(finalUrl).hostname;
+  
+      // Daftar kata kunci untuk mendeteksi redirect ke situs tertentu
+      const keywords = ['internet positif', 'trust+', 'blocked', 'diblokir'];
+  
+      // Cek apakah body mengandung kata kunci yang menduga pemblokiran
+      const bodyContainsBlockedKeywords = keywords.some(keyword =>
+        body.toLowerCase().includes(keyword)
+      );
+  
+      // Cek apakah ada redirect yang mengubah hostname ke provider tertentu
+      const isRedirectedToProvider = 
+        initialHostname !== finalHostname && (
+          finalHostname.includes('internetpositif') ||  // Contoh host dari Internet Positive
+          finalHostname.includes('trust') ||          // Contoh host Trust+
+          finalHostname.includes('blocked') ||        // Contoh host halaman blokir
+          finalHostname.includes('diblokir')          // Contoh host halaman blokir
+        );
+  
+      // Cek tanda-tanda pemblokiran
+      const isBlocked = 
+        response.status === 403 ||            // Forbidden
+        response.status === 451 ||            // Unavailable For Legal Reasons
+        (response.status >= 300 && response.status < 400) ||  // Redirect status
+        bodyContainsBlockedKeywords ||
+        isRedirectedToProvider;
+  
+      return isBlocked;
+    } catch (error) {
+      // Jika tidak bisa diakses sama sekali, kemungkinan diblokir
+      console.error(`Error mengakses ${targetUrl}:`, error);
+      return true;
+    }
   }
-}
+  
 
 // Fungsi untuk memeriksa satu domain
 const cekSatuDomain = async (domain) => {
