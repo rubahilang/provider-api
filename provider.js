@@ -12,140 +12,138 @@ const PORT = process.env.PORT || 3000;
 
 // Fungsi untuk mendapatkan informasi DNS
 async function cekDNS(hostname) {
-  try {
-    const addresses = await dns.promises.lookup(hostname, { all: true });
-    return addresses;
-  } catch (error) {
-    throw new Error(`DNS lookup gagal: ${error.message}`);
-  }
+    try {
+        const addresses = await dns.promises.lookup(hostname, { all: true });
+        return addresses;
+    } catch (error) {
+        throw new Error(`DNS lookup gagal: ${error.message}`);
+    }
 }
 
-// Fungsi untuk mengecek apakah website diblokir
-// Fungsi untuk mengecek apakah website diblokir
+/**
+ * Fungsi helper untuk mendeteksi apakah lokasi redirect mencurigakan,
+ * misalnya mengandung kata kunci "internet-positif", "trust", atau semacamnya.
+ */
+function isSuspiciousRedirect(redirectUrl = '') {
+    // Ubah atau tambahkan pattern yang sesuai dengan halaman blokir dari ISP.
+    const lowerUrl = redirectUrl.toLowerCase();
+    const suspiciousKeywords = [
+        'internet-positif',
+        'trust+', 
+        'blocked',
+        'diblokir',
+        'blockpage'
+    ];
+    return suspiciousKeywords.some(keyword => lowerUrl.includes(keyword));
+}
+
+/**
+ * Fungsi untuk mengecek apakah website diblokir
+ * (termasuk deteksi via body response & redirect manual).
+ */
 async function cekBlokir(targetUrl) {
     try {
-      const response = await fetch(targetUrl, { 
-        timeout: 10000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, seperti Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        // Gunakan redirect: 'manual' agar kita bisa deteksi URL Location (jika ada).
+        const response = await fetch(targetUrl, { 
+            timeout: 10000,
+            redirect: 'manual',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+        });
+        
+        // Cek apakah ada redirect:
+        // Jika response.status = 3xx, maka biasanya ada header 'location'
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+            const location = response.headers.get('location') || '';
+            if (isSuspiciousRedirect(location)) {
+                return true; // Dianggap diblokir karena dialihkan ke halaman "internet positif" dsb.
+            }
         }
-      });
-  
-      // Logging status dan URL yang diakses
-      console.log(`Mengakses: ${targetUrl} - Status: ${response.status}`);
-      
-      // Ambil URL akhir setelah semua redirect (jika ada)
-      const finalUrl = response.url;
-      console.log(`URL akhir: ${finalUrl}`);
-  
-      const body = await response.text();
-  
-      // Logging sebagian isi body untuk verifikasi
-      console.log(`Body snippet: ${body.substring(0, 200)}...`);
-  
-      // Membuat objek URL untuk memeriksa hostname awal dan akhir
-      const initialHostname = new URL(targetUrl).hostname;
-      const finalHostname = new URL(finalUrl).hostname;
-  
-      // Daftar kata kunci untuk mendeteksi redirect ke situs tertentu
-      const keywords = ['internet positif', 'trust+', 'blocked', 'diblokir'];
-  
-      // Cek apakah body mengandung kata kunci yang menduga pemblokiran
-      const bodyContainsBlockedKeywords = keywords.some(keyword =>
-        body.toLowerCase().includes(keyword)
-      );
-  
-      // Cek apakah ada redirect yang mengubah hostname ke provider tertentu
-      const isRedirectedToProvider = 
-        initialHostname !== finalHostname && (
-          finalHostname.includes('internetpositif') ||  // Contoh host dari Internet Positive
-          finalHostname.includes('trust') ||          // Contoh host Trust+
-          finalHostname.includes('blocked') ||        // Contoh host halaman blokir
-          finalHostname.includes('diblokir')          // Contoh host halaman blokir
-        );
-  
-      // Cek tanda-tanda pemblokiran
-      const isBlocked = 
-        response.status === 403 ||            // Forbidden
-        response.status === 451 ||            // Unavailable For Legal Reasons
-        (response.status >= 300 && response.status < 400) ||  // Redirect status
-        bodyContainsBlockedKeywords ||
-        isRedirectedToProvider;
-  
-      return isBlocked;
+
+        // Jika tidak ada redirect, kita cek status dan body seperti biasa.
+        const body = await response.text();
+
+        // Cek tanda-tanda pemblokiran di body atau status code
+        const isBlocked =
+            response.status === 403 || // Forbidden
+            response.status === 451 || // Unavailable For Legal Reasons
+            body.toLowerCase().includes('internet positif') ||
+            body.toLowerCase().includes('trust+') ||
+            body.toLowerCase().includes('blocked') ||
+            body.toLowerCase().includes('diblokir');
+
+        return isBlocked;
     } catch (error) {
-      // Jika tidak bisa diakses sama sekali, kemungkinan diblokir
-      console.error(`Error mengakses ${targetUrl}:`, error);
-      return true;
+        // Jika terjadi error (misal: koneksi time out, host tidak ditemukan, dsb),
+        // Bisa jadi memang diblokir atau domain invalid.
+        return true;
     }
-  }
-  
+}
 
 // Fungsi untuk memeriksa satu domain
 const cekSatuDomain = async (domain) => {
-  try {
-    let targetUrl = domain;
-    if (!/^https?:\/\//i.test(domain)) {
-      targetUrl = 'http://' + domain;
+    try {
+        let targetUrl = domain;
+        if (!/^https?:\/\//i.test(domain)) {
+            targetUrl = 'http://' + domain;
+        }
+
+        const parsedUrl = new URL(targetUrl);
+        const hostname = parsedUrl.hostname || domain;
+
+        // Cek pemblokiran
+        const isBlocked = await cekBlokir(targetUrl);
+        
+        // Format response yang sederhana
+        return {
+            [hostname]: {
+                blocked: isBlocked
+            }
+        };
+
+    } catch (error) {
+        // Jika parsing URL gagal, anggap saja diblokir/invalid
+        return {
+            [domain]: {
+                blocked: true
+            }
+        };
     }
-
-    const parsedUrl = new URL(targetUrl);
-    const hostname = parsedUrl.hostname || domain;
-
-    // Cek pemblokiran
-    const isBlocked = await cekBlokir(targetUrl);
-    
-    // Format response yang sederhana
-    return {
-      [hostname]: {
-        blocked: isBlocked
-      }
-    };
-
-  } catch (error) {
-    return {
-      [domain]: {
-        blocked: true
-      }
-    };
-  }
 };
 
 // Endpoint /check
 app.get('/check', async (req, res) => {
-// Mendukung parameter "domains" atau "domain"
-  const domainsParam = req.query.domains || req.query.domain;
+    const domainsParam = req.query.domains;
 
-  if (!domainsParam) {
-    return res.status(400).json({ 
-      error: 'Parameter "domains" atau "domain" diperlukan.',
-      example: '/?domains=reddit.com'  // Contoh penggunaan
-    });
-  }
+    if (!domainsParam) {
+        return res.status(400).json({ 
+            error: 'Parameter "domains" diperlukan.',
+            example: '/check?domains=reddit.com'
+        });
+    }
 
-  // Memisahkan domain jika terdapat koma, atau menggunakannya sebagai satu domain
-  const domains = domainsParam.split(',')
-    .map(domain => domain.trim())
-    .filter(domain => domain.length > 0);
+    const domains = domainsParam.split(',')
+        .map(domain => domain.trim())
+        .filter(domain => domain.length > 0);
 
-  if (domains.length === 0) {
-    return res.status(400).json({ 
-      error: 'Tidak ada domain valid yang diberikan.'
-    });
-  }
+    if (domains.length === 0) {
+        return res.status(400).json({ 
+            error: 'Tidak ada domain valid yang diberikan.'
+        });
+    }
 
-  try {
-    // Memeriksa setiap domain
-    const hasil = await Promise.all(domains.map(domain => cekSatuDomain(domain)));
-    // Menggabungkan hasil pemeriksaan domain
-    const combinedResult = Object.assign({}, ...hasil);
-    res.json(combinedResult);
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Terjadi kesalahan saat memeriksa domain.'
-    });
-  }
+    try {
+        const hasil = await Promise.all(domains.map(domain => cekSatuDomain(domain)));
+        const combinedResult = Object.assign({}, ...hasil);
+        res.json(combinedResult);
+    } catch (error) {
+        res.status(500).json({ 
+            error: 'Terjadi kesalahan saat memeriksa domain.'
+        });
+    }
 });
+
 
 // Endpoint root
 app.get('/', (req, res) => {
