@@ -1,0 +1,27 @@
+{
+  "name": "web",
+  "version": "1.0.0",
+  "main": "tes.js",
+  "type": "module",
+  "scripts": {
+    "start": "node tes.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "axios": "^1.4.0",
+    "bcrypt": "^5.1.1",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.7",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "helmet": "^7.1.0",
+    "multer": "^1.4.5-lts.1",
+    "node-fetch": "^3.3.1",
+    "uuid": "^11.0.3"
+  }
+}
