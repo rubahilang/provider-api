@@ -199,8 +199,7 @@ const cekSatuDomain = async (domain) => {
             console.log(`Ping gagal untuk ${hostname}`);
             return {
                 [hostname]: {
-                    blocked: true,
-                    ping: false
+                    blocked: true
                 }
             };
         }
@@ -227,11 +226,11 @@ const cekSatuDomain = async (domain) => {
 
 // Endpoint /check
 app.get('/check', async (req, res) => {
-    const domainsParam = req.query.domains;
+    const domainsParam = req.query.domains || req.query.domain;
 
     if (!domainsParam) {
         return res.status(400).json({ 
-            error: 'Parameter "domains" diperlukan.',
+            error: 'Parameter "domain" atau "domains" diperlukan.',
             example: '/check?domains=reddit.com'
         });
     }
@@ -252,10 +251,12 @@ app.get('/check', async (req, res) => {
         res.json(combinedResult);
     } catch (error) {
         res.status(500).json({ 
-            error: 'Terjadi kesalahan saat memeriksa domain.'
+            error: 'Terjadi kesalahan saat memeriksa domain.',
+            details: error.message
         });
     }
 });
+
 
 // Endpoint root
 app.get('/', (req, res) => {
