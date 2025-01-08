@@ -6,77 +6,165 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import axios from 'axios';
+import { Resolver } from 'dns/promises';
+import { URL } from 'url';
+import https from 'https';
+import ping from 'ping';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Fungsi untuk mendapatkan informasi DNS
-async function cekDNS(hostname) {
+// Jika Anda menggunakan proxy, konfigurasi di sini
+// import HttpsProxyAgent from 'https-proxy-agent';
+// const proxy = 'http://your-proxy-address:port'; // Ganti dengan alamat proxy Anda
+// const agent = new HttpsProxyAgent(proxy);
+
+// Jika tidak menggunakan proxy, buat https.Agent dengan pengaturan default
+const agent = new https.Agent({
+    rejectUnauthorized: false, // Izinkan sertifikat tidak sah untuk deteksi
+});
+
+// Fungsi untuk membandingkan resolusi DNS operator vs publik
+async function cekPerbedaanDNS(domain) {
     try {
-        const addresses = await dns.promises.lookup(hostname, { all: true });
-        return addresses;
+        // Resolver default (DNS operator)
+        const resolverOperator = new Resolver();
+        // Jika Anda tahu IP DNS operator, set di sini
+        // resolverOperator.setServers(['ip-dns-operator']);
+
+        const operatorIPs = await resolverOperator.resolve4(domain);
+
+        // Resolver publik (Google DNS)
+        const resolverGoogle = new Resolver();
+        resolverGoogle.setServers(['8.8.8.8', '8.8.4.4']);
+        const googleIPs = await resolverGoogle.resolve4(domain);
+
+        const operatorIPsSorted = operatorIPs.sort();
+        const googleIPsSorted = googleIPs.sort();
+        const isDifferent = JSON.stringify(operatorIPsSorted) !== JSON.stringify(googleIPsSorted);
+
+        return {
+            operatorIPs,
+            googleIPs,
+            isDifferent
+        };
     } catch (error) {
-        throw new Error(`DNS lookup gagal: ${error.message}`);
+        console.error(`Error checking DNS for ${domain}: ${error.message}`);
+        return null;
     }
 }
 
-/**
- * Fungsi helper untuk mendeteksi apakah lokasi redirect mencurigakan,
- * misalnya mengandung kata kunci "internet-positif", "trust", atau semacamnya.
- */
+// Fungsi untuk melakukan ping ke domain
+async function pingDomain(domain) {
+    try {
+        const res = await ping.promise.probe(domain);
+        return res.alive;
+    } catch (error) {
+        console.error(`Error pinging ${domain}: ${error.message}`);
+        return false;
+    }
+}
+
+// Fungsi helper untuk mendeteksi apakah lokasi redirect mencurigakan
 function isSuspiciousRedirect(redirectUrl = '') {
-    // Ubah atau tambahkan pattern yang sesuai dengan halaman blokir dari ISP.
     const lowerUrl = redirectUrl.toLowerCase();
     const suspiciousKeywords = [
         'internet-positif',
-        'trust+', 
+        'trust+',
         'blocked',
         'diblokir',
-        'blockpage'
+        'blockpage',
+        'axis',
+        'xl'
     ];
     return suspiciousKeywords.some(keyword => lowerUrl.includes(keyword));
 }
 
-/**
- * Fungsi untuk mengecek apakah website diblokir
- * (termasuk deteksi via body response & redirect manual).
- */
+// Fungsi untuk mengecek apakah website diblokir
 async function cekBlokir(targetUrl) {
     try {
-        // Gunakan redirect: 'manual' agar kita bisa deteksi URL Location (jika ada).
-        const response = await fetch(targetUrl, { 
+        // Pastikan URL menggunakan HTTPS
+        const parsedUrl = new URL(targetUrl);
+        const protocol = parsedUrl.protocol;
+
+        const httpsUrl = protocol === 'https:' ? targetUrl : `https://${parsedUrl.hostname}`;
+
+        const response = await axios.get(httpsUrl, { 
             timeout: 10000,
-            redirect: 'manual',
+            maxRedirects: 0, // Jangan ikuti redirects
+            validateStatus: null, // Jangan lempar error untuk status tertentu
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
+            },
+            httpsAgent: agent
         });
-        
-        // Cek apakah ada redirect:
-        // Jika response.status = 3xx, maka biasanya ada header 'location'
-        if ([301, 302, 303, 307, 308].includes(response.status)) {
-            const location = response.headers.get('location') || '';
+
+        console.log(`\nChecking URL: ${httpsUrl}`);
+        console.log(`Response Status: ${response.status}`);
+        console.log(`Response Headers:`, response.headers);
+
+        // Cek redirect
+        if (response.status >= 300 && response.status < 400 && response.headers.location) {
+            const location = response.headers.location;
+            console.log(`Redirect Location: ${location}`);
             if (isSuspiciousRedirect(location)) {
-                return true; // Dianggap diblokir karena dialihkan ke halaman "internet positif" dsb.
+                console.log('Teridentifikasi sebagai pemblokiran melalui redirect.');
+                return true;
             }
         }
 
-        // Jika tidak ada redirect, kita cek status dan body seperti biasa.
-        const body = await response.text();
+        // Cek konten respons untuk kata kunci pemblokiran
+        let body = '';
+        if (typeof response.data === 'string') {
+            body = response.data.toLowerCase();
+        } else if (Buffer.isBuffer(response.data)) {
+            body = response.data.toString('utf-8').toLowerCase();
+        } else {
+            body = JSON.stringify(response.data).toLowerCase();
+        }
 
-        // Cek tanda-tanda pemblokiran di body atau status code
+        console.log(`Response Body Snippet: ${body.substring(0, 200)}...`);
+
         const isBlocked =
             response.status === 403 || // Forbidden
             response.status === 451 || // Unavailable For Legal Reasons
-            body.toLowerCase().includes('internet positif') ||
-            body.toLowerCase().includes('trust+') ||
-            body.toLowerCase().includes('blocked') ||
-            body.toLowerCase().includes('diblokir');
+            body.includes('internet positif') ||
+            body.includes('trust+') ||
+            body.includes('blocked') ||
+            body.includes('diblokir') ||
+            body.includes('axis') ||
+            body.includes('xl');
+
+        if (isBlocked) {
+            console.log('Teridentifikasi sebagai pemblokiran berdasarkan status atau konten.');
+        }
 
         return isBlocked;
+
     } catch (error) {
-        // Jika terjadi error (misal: koneksi time out, host tidak ditemukan, dsb),
-        // Bisa jadi memang diblokir atau domain invalid.
+        // Tangani SSL errors dan lainnya
+        if (error.code === 'ERR_SSL_VERSION_OR_CIPHER_MISMATCH') {
+            console.log('Terjadi kesalahan SSL: ERR_SSL_VERSION_OR_CIPHER_MISMATCH');
+            return true;
+        }
+
+        if (error.code === 'ECONNREFUSED') {
+            console.log('Koneksi ditolak oleh server.');
+            return true;
+        }
+
+        if (error.code === 'ETIMEDOUT') {
+            console.log('Koneksi time out.');
+            return true;
+        }
+
+        if (error.code === 'ECONNRESET') {
+            console.log('Koneksi reset oleh server.');
+            return true;
+        }
+
+        console.error(`Error accessing ${targetUrl}: ${error.message}`);
+        // Jika terjadi error lain, anggap diblokir
         return true;
     }
 }
@@ -86,13 +174,37 @@ const cekSatuDomain = async (domain) => {
     try {
         let targetUrl = domain;
         if (!/^https?:\/\//i.test(domain)) {
-            targetUrl = 'http://' + domain;
+            targetUrl = 'https://' + domain; // Prefer HTTPS
         }
 
         const parsedUrl = new URL(targetUrl);
         const hostname = parsedUrl.hostname || domain;
 
-        // Cek pemblokiran
+        // Cek perbedaan DNS
+        const dnsDifferences = await cekPerbedaanDNS(hostname);
+        if (dnsDifferences && dnsDifferences.isDifferent) {
+            console.log(`DNS perbedaan terdeteksi untuk ${hostname}`);
+            return {
+                [hostname]: {
+                    blocked: true,
+                    dns: dnsDifferences
+                }
+            };
+        }
+
+        // Cek ping
+        const isPingAlive = await pingDomain(hostname);
+        if (!isPingAlive) {
+            console.log(`Ping gagal untuk ${hostname}`);
+            return {
+                [hostname]: {
+                    blocked: true,
+                    ping: false
+                }
+            };
+        }
+
+        // Cek pemblokiran via HTTP/HTTPS
         const isBlocked = await cekBlokir(targetUrl);
         
         // Format response yang sederhana
@@ -143,6 +255,7 @@ app.get('/check', async (req, res) => {
         });
     }
 });
+
 
 
 // Endpoint root
