@@ -1,7 +1,6 @@
 import express from 'express';
 import dns from 'dns';
 import fetch from 'node-fetch';
-import { URL } from 'url';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
