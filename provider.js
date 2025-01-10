@@ -1,260 +1,95 @@
-import express from 'express';
-import dns from 'dns';
-import fetch from 'node-fetch';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import fs from 'fs';
-import axios from 'axios';
-import { Resolver } from 'dns/promises';
-import { URL } from 'url';
+import express from 'express';
+import fetch from 'node-fetch';
 import https from 'https';
-import ping from 'ping';
+import { URL } from 'url';
+import { fileURLToPath } from 'url';
+import axios from 'axios';
 
+// Fungsi untuk mendapatkan domain utama (tanpa subdomain)
+function getRootDomain(domain) {
+    const parts = domain.split('.');
+    if (parts.length > 2) {
+        // Jika domain terdiri dari lebih dari dua bagian, kita ambil dua bagian terakhir (misalnya example.co.uk)
+        return parts.slice(-2).join('.');
+    }
+    return domain; // Domain sudah hanya satu bagian (misalnya example.com)
+}
+
+// Inisialisasi Express app
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// Jika Anda menggunakan proxy, konfigurasi di sini
-// import HttpsProxyAgent from 'https-proxy-agent';
-// const proxy = 'http://your-proxy-address:port'; // Ganti dengan alamat proxy Anda
-// const agent = new HttpsProxyAgent(proxy);
-
-// Jika tidak menggunakan proxy, buat https.Agent dengan pengaturan default
-const agent = new https.Agent({
-    rejectUnauthorized: false, // Izinkan sertifikat tidak sah untuk deteksi
-});
-
-// Fungsi untuk membandingkan resolusi DNS operator vs publik
-async function cekPerbedaanDNS(domain) {
-    try {
-        // Resolver default (DNS operator)
-        const resolverOperator = new Resolver();
-        // Jika Anda tahu IP DNS operator, set di sini
-        // resolverOperator.setServers(['ip-dns-operator']);
-
-        const operatorIPs = await resolverOperator.resolve4(domain);
-
-        // Resolver publik (Google DNS)
-        const resolverGoogle = new Resolver();
-        resolverGoogle.setServers(['8.8.8.8', '8.8.4.4']);
-        const googleIPs = await resolverGoogle.resolve4(domain);
-
-        const operatorIPsSorted = operatorIPs.sort();
-        const googleIPsSorted = googleIPs.sort();
-        const isDifferent = JSON.stringify(operatorIPsSorted) !== JSON.stringify(googleIPsSorted);
-
-        return {
-            operatorIPs,
-            googleIPs,
-            isDifferent
-        };
-    } catch (error) {
-        console.error(`Error checking DNS for ${domain}: ${error.message}`);
-        return null;
+// Fungsi untuk mengecek URL
+async function checkURL(urlToCheck) {
+    // Pastikan URL selalu memiliki skema (http:// atau https://)
+    if (!/^https?:\/\//i.test(urlToCheck)) {
+        urlToCheck = 'https://' + urlToCheck; // Menambahkan https:// jika tidak ada skema
     }
-}
 
-// Fungsi untuk melakukan ping ke domain
-async function pingDomain(domain) {
+    const agent = new https.Agent({ rejectUnauthorized: false }); // Menonaktifkan pengecekan sertifikat SSL
     try {
-        const res = await ping.promise.probe(domain);
-        return res.alive;
-    } catch (error) {
-        console.error(`Error pinging ${domain}: ${error.message}`);
-        return false;
-    }
-}
-
-// Fungsi helper untuk mendeteksi apakah lokasi redirect mencurigakan
-function isSuspiciousRedirect(redirectUrl = '') {
-    if (!redirectUrl) return false;
-    
-    const lowerUrl = redirectUrl.toLowerCase();
-    
-    // Keyword untuk Internet Positif / Kominfo
-    const kominfoCriteria = [
-        'internet-positif',
-        'trust+',
-        'trustpositif',
-        'kominfo'
-    ];
-    
-    // Keyword untuk operator seluler
-    const operatorCriteria = [
-        'block.indosat.com',
-        'block.xl.co.id',
-        'block.axis.net',
-        'block.telkomsel.com',
-        'internetpositif',
-        'blockpage',
-        'restricted',
-        'access.denied'
-    ];
-
-    // Cek kriteria Kominfo
-    const isKominfoBlock = kominfoCriteria.some(keyword => lowerUrl.includes(keyword));
-    
-    // Cek kriteria operator
-    const isOperatorBlock = operatorCriteria.some(keyword => lowerUrl.includes(keyword));
-    
-    return isKominfoBlock || isOperatorBlock;
-}
-
-// Fungsi untuk mengecek apakah website diblokir
-async function cekBlokir(targetUrl) {
-    try {
-        const parsedUrl = new URL(targetUrl);
-        const httpsUrl = parsedUrl.protocol === 'https:' ? targetUrl : `https://${parsedUrl.hostname}`;
-
-        const response = await axios.get(httpsUrl, { 
-            timeout: 10000,
-            maxRedirects: 5,
-            validateStatus: null, // Terima semua status code
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            },
-            httpsAgent: agent
+        const response = await fetch(urlToCheck, {
+            redirect: 'manual', // Jangan ikuti redirect otomatis
+            agent: agent, // Gunakan agent untuk SSL
         });
 
-        console.log(`\nChecking URL: ${httpsUrl}`);
-        console.log(`Response Status: ${response.status}`);
-        console.log(`Response Headers:`, response.headers);
+        // Cek status respons dan log untuk debugging
+        console.log(`Status untuk ${urlToCheck}: ${response.status}`);
+        console.log(`Location header: ${response.headers.get('location')}`);
 
-        // Cek redirect
+        // Ambil root domain untuk membandingkan asal dan tujuan redirect
+        const originalDomain = getRootDomain(new URL(urlToCheck).hostname);
+
+        // Cek apakah URL dialihkan
         if (response.status >= 300 && response.status < 400) {
-            const location = response.headers.location;
-            console.log(`Redirect Location: ${location}`);
-            if (isSuspiciousRedirect(location)) {
-                console.log('Teridentifikasi sebagai pemblokiran melalui redirect.');
-                return true;
+            const redirectLocation = response.headers.get('location');
+            const redirectDomain = getRootDomain(new URL(redirectLocation).hostname);
+
+            // Cek jika redirect mengarah ke domain yang berbeda (bukan hanya subdomain)
+            if (redirectDomain !== originalDomain) {
+                console.log(`Redirect ke domain berbeda: ${redirectDomain} != ${originalDomain}`);
+                return { blocked: true }; // Redirect ke domain berbeda dianggap diblokir
+            } else {
+                console.log(`Redirect ke subdomain yang sama: ${redirectDomain} == ${originalDomain}`);
+                return { blocked: false }; // Redirect ke subdomain yang sama dianggap aman
             }
-        }
-
-        // Cek konten respons
-        let body = '';
-        if (typeof response.data === 'string') {
-            body = response.data.toLowerCase();
-        } else if (Buffer.isBuffer(response.data)) {
-            body = response.data.toString('utf-8').toLowerCase();
+        } else if (response.ok) {
+            console.log(`URL aman: ${urlToCheck}`);
+            return { blocked: false }; // Tidak ada masalah, URL aman
         } else {
-            body = JSON.stringify(response.data).toLowerCase();
+            console.log(`URL tidak tersedia: ${urlToCheck}`);
+            return { blocked: true }; // URL tidak tersedia, dianggap terblokir
         }
-
-        // Keywords untuk deteksi konten yang diblokir
-        const blockKeywords = [
-            'internet positif',
-            'trust+',
-            'trustpositif',
-            'konten negatif',
-            'situs diblokir',
-            'telah diblokir',
-            'access denied',
-            'restricted access',
-            'blockpage',
-            'page blocked'
-        ];
-
-        // Cek konten untuk keyword pemblokiran
-        const hasBlockKeywords = blockKeywords.some(keyword => body.includes(keyword));
-
-        // Cek status code spesifik untuk pemblokiran
-        const isBlockedStatus = [403, 451].includes(response.status);
-
-        if (hasBlockKeywords || isBlockedStatus) {
-            console.log('Teridentifikasi sebagai pemblokiran berdasarkan konten atau status.');
-            return true;
-        }
-
-        return false;
-
     } catch (error) {
-        // Error yang mengindikasikan pemblokiran
-        const blockingErrors = [
-            'ECONNREFUSED',
-            'ERR_SSL_VERSION_OR_CIPHER_MISMATCH',
-            'CERT_HAS_EXPIRED',
-            'UNABLE_TO_VERIFY_LEAF_SIGNATURE'
-        ];
-
-        if (blockingErrors.includes(error.code)) {
-            console.log(`Koneksi error yang mengindikasikan pemblokiran: ${error.code}`);
-            return true;
-        }
-
-        // Error timeout atau koneksi reset tidak selalu berarti diblokir
-        if (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET') {
-            console.log(`Koneksi timeout/reset: ${error.code}`);
-            return false;
-        }
-
-        console.error(`Error accessing ${targetUrl}: ${error.message}`);
-        return false;
+        // Cek apakah error berhubungan dengan sertifikat yang kedaluwarsa atau masalah SSL
+        console.log(`Terjadi kesalahan saat memeriksa ${urlToCheck}: ${error.message}`);
+        return { blocked: true }; // Terjadi kesalahan, dianggap terblokir
     }
 }
 
-// Fungsi untuk memeriksa satu domain
-const cekSatuDomain = async (domain) => {
-    try {
-        let targetUrl = domain;
-        if (!/^https?:\/\//i.test(domain)) {
-            targetUrl = 'https://' + domain;
-        }
-
-        const parsedUrl = new URL(targetUrl);
-        const hostname = parsedUrl.hostname || domain;
-
-        // Cek pemblokiran via HTTP/HTTPS
-        const isBlocked = await cekBlokir(targetUrl);
-        
-        // Return format sederhana
-        return {
-            [hostname]: {
-                blocked: isBlocked
-            }
-        };
-
-    } catch (error) {
-        console.error(`Error checking domain ${domain}:`, error);
-        return {
-            [domain]: {
-                blocked: false
-            }
-        };
-    }
-};
-
-// Endpoint /check
+// Definisikan route untuk cek status domain
 app.get('/check', async (req, res) => {
-    const domainsParam = req.query.domains || req.query.domain;
+    const domain = req.query.domain || req.query.domains;
 
-    if (!domainsParam) {
-        return res.status(400).json({ 
-            error: 'Parameter "domain" atau "domains" diperlukan.',
-            example: '/check?domains=reddit.com'
-        });
+    if (!domain) {
+        return res.status(400).json({ error: 'Parameter "domain" atau "domains" harus disediakan.' });
     }
 
-    const domains = domainsParam.split(',')
-        .map(domain => domain.trim())
-        .filter(domain => domain.length > 0);
+    // Panggil fungsi checkURL untuk mengecek status
+    const result = await checkURL(domain);
+    
+    // Format hasil dalam objek JSON yang sesuai
+    const response = {
+        [domain]: result
+    };
 
-    if (domains.length === 0) {
-        return res.status(400).json({ 
-            error: 'Tidak ada domain valid yang diberikan.'
-        });
-    }
-
-    try {
-        const hasil = await Promise.all(domains.map(domain => cekSatuDomain(domain)));
-        const combinedResult = Object.assign({}, ...hasil);
-        res.json(combinedResult);
-    } catch (error) {
-        res.status(500).json({ 
-            error: 'Terjadi kesalahan saat memeriksa domain.',
-            details: error.message
-        });
-    }
+    // Kirim hasil dalam format JSON
+    res.json(response);
 });
 
+// Menjalankan server di port 3000
+const PORT = 3000;
 
 // Endpoint root
 app.get('/', (req, res) => {
