@@ -6,6 +6,7 @@ import https from 'https';
 import { URL } from 'url';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
+const puppeteer = require('puppeteer');
 
 // Fungsi untuk mendapatkan domain utama (tanpa subdomain)
 function getRootDomain(domain) {
@@ -874,6 +875,97 @@ fetchData();
 
 // Mengatur interval untuk memanggil fetchData setiap 1 menit (60000 ms)
 setInterval(fetchData, 60 * 1000);
+
+// Fungsi untuk melakukan pencarian Google dan mengambil hasil organic
+async function performSearch(keyword) {
+  const browser = await puppeteer.launch({ headless: true });
+  const page = await browser.newPage();
+
+  // Konversi '+' menjadi spasi untuk query
+  const query = encodeURIComponent(keyword.replace(/\+/g, ' '));
+  await page.goto(`https://www.google.com/search?q=${query}&num=100`, { waitUntil: 'networkidle2' });
+  
+  // Tunggu sampai hasil loading
+  await page.waitForSelector('div.g');
+
+  // Ambil hasil organic (hanya sebagian)
+  const organicResults = await page.evaluate(() => {
+    const results = [];
+    const resultElements = document.querySelectorAll('div.g');
+    resultElements.forEach((element) => {
+      if (results.length >= 10) return; // Batasi 10 hasil
+      const titleTag = element.querySelector('h3');
+      const linkTag = element.querySelector('a');
+      const snippetTag = element.querySelector('.VwiC3b');
+      const displayedLinkTag = element.querySelector('cite');
+
+      if (titleTag && linkTag) {
+        results.push({
+          position: results.length + 1,
+          title: titleTag.innerText,
+          link: linkTag.href,
+          displayed_link: displayedLinkTag ? displayedLinkTag.innerText : '',
+          snippet: snippetTag ? snippetTag.innerText : '',
+          review: ''  // Placeholder untuk review jika diperlukan
+        });
+      }
+    });
+    return results;
+  });
+
+  await browser.close();
+  return organicResults;
+}
+
+app.get('/api/', async (req, res) => {
+  try {
+    let { keyword, domain } = req.query;
+    if (!keyword) {
+      return res.status(400).json({ error: 'Parameter "keyword" diperlukan.' });
+    }
+    // Jika domain disertakan, modifikasi keyword
+    if (domain) {
+      keyword += ` site:${domain}`;
+    }
+
+    // Tentukan waktu proses dan metadata sederhana
+    const processedAt = new Date().toISOString();
+
+    // Lakukan pencarian
+    const organicResults = await performSearch(keyword);
+
+    // Susun output JSON dengan search_parameters yang diperbarui
+    const responseJson = {
+      search_metadata: {
+        id: '',  // Dapat diisi dengan UUID atau identifier unik lainnya
+        status: "success",
+        created_at: new Date().toISOString(),
+        processed_at: processedAt
+      },
+      search_parameters: {
+        domain: 'google.com',
+        lang: 'id',
+        country: 'IN',
+        location: 'Jakarta, Indonesia',
+        q: keyword,
+        device: 'mobile',
+        url: `https://www.google.com/search?q=${encodeURIComponent(keyword)}`,
+        num: 100,
+        sourceid: 'chrome',
+        ie: 'UTF-8'
+      },
+      results: {
+        organic: organicResults
+        // Bagian lain seperti answer_box, local_pack, ads, people_also_ask, related_search belum diimplementasikan
+      }
+    };
+
+    res.json(responseJson);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Terjadi kesalahan saat melakukan pencarian.' });
+  }
+});
 
 // Jalankan server
 app.listen(PORT, () => {
