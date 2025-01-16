@@ -6,7 +6,7 @@ import https from 'https';
 import { URL } from 'url';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
-const puppeteer = require('puppeteer');
+import puppeteer from 'puppeteer';
 
 // Fungsi untuk mendapatkan domain utama (tanpa subdomain)
 function getRootDomain(domain) {
