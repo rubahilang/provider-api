@@ -882,37 +882,56 @@ async function performSearch(keyword) {
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage'
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled'
     ]
   });
+  
   const page = await browser.newPage();
+  
+  // Set a realistic user agent
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36');
+  
   const query = encodeURIComponent(keyword.replace(/\+/g, ' '));
-  await page.goto(`https://www.google.com/search?q=${query}&num=100`, { waitUntil: 'networkidle2' });
-  await page.waitForSelector('div.g');
-
-  const organicResults = await page.evaluate(() => {
-    const results = [];
-    const resultElements = document.querySelectorAll('div.g');
-    resultElements.forEach((element) => {
-      if (results.length >= 10) return;
-      const titleTag = element.querySelector('h3');
-      const linkTag = element.querySelector('a');
-      const snippetTag = element.querySelector('.VwiC3b');
-      const displayedLinkTag = element.querySelector('cite');
-
-      if (titleTag && linkTag) {
-        results.push({
-          position: results.length + 1,
-          title: titleTag.innerText,
-          link: linkTag.href,
-          displayed_link: displayedLinkTag ? displayedLinkTag.innerText : '',
-          snippet: snippetTag ? snippetTag.innerText : '',
-          review: ''
-        });
-      }
-    });
-    return results;
+  
+  await page.goto(`https://www.google.com/search?q=${query}&num=100`, {
+    waitUntil: ['load', 'networkidle2']
   });
+
+  let organicResults = [];
+  
+  try {
+    // Increase the timeout and wait for the results selector
+    await page.waitForSelector('div.g', { timeout: 60000 });
+    
+    organicResults = await page.evaluate(() => {
+      const results = [];
+      const resultElements = document.querySelectorAll('div.g');
+      resultElements.forEach((element) => {
+        if (results.length >= 10) return;
+        
+        const titleTag = element.querySelector('h3');
+        const linkTag = element.querySelector('a');
+        const snippetTag = element.querySelector('.VwiC3b');
+        const displayedLinkTag = element.querySelector('cite');
+
+        if (titleTag && linkTag) {
+          results.push({
+            position: results.length + 1,
+            title: titleTag.innerText,
+            link: linkTag.href,
+            displayed_link: displayedLinkTag ? displayedLinkTag.innerText : '',
+            snippet: snippetTag ? snippetTag.innerText : '',
+            review: ''
+          });
+        }
+      });
+      return results;
+    });
+  } catch (err) {
+    console.warn('No results found or selector issue:', err);
+    // organicResults will remain an empty array if results weren't found
+  }
 
   await browser.close();
   return organicResults;
@@ -927,6 +946,7 @@ app.get('/api/', async (req, res) => {
     if (domain) {
       keyword += ` site:${domain}`;
     }
+    
     const processedAt = new Date().toISOString();
     const organicResults = await performSearch(keyword);
 
