@@ -35,4 +35,4 @@ npm install
 
 # Jalankan skrip Node.js
 echo "Menjalankan provider.js..."
-node provider.js
+node prov.js
