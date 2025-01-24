@@ -7,6 +7,16 @@ import { URL } from 'url';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
 
+// Fungsi untuk mendapatkan domain utama (tanpa subdomain)
+function getRootDomain(domain) {
+    const parts = domain.split('.');
+    if (parts.length > 2) {
+        // Jika domain terdiri dari lebih dari dua bagian, kita ambil dua bagian terakhir (misalnya example.co.uk)
+        return parts.slice(-2).join('.');
+    }
+    return domain; // Domain sudah hanya satu bagian (misalnya example.com)
+}
+
 // Inisialisasi Express app
 const app = express();
 
@@ -32,21 +42,15 @@ async function checkURL(urlToCheck) {
         // Cek status kode respons
         if (response.status >= 300 && response.status < 400) {
             const redirectLocation = response.headers.get('location');
-            if (redirectLocation) {
-                const redirectURL = new URL(redirectLocation, urlToCheck); // Handle relative URLs
-                const redirectDomain = getRootDomain(redirectURL.hostname);
+            const redirectDomain = getRootDomain(new URL(redirectLocation).hostname);
 
-                // Cek jika redirect mengarah ke domain yang berbeda (bukan hanya subdomain)
-                if (redirectDomain !== originalDomain) {
-                    console.log(`Redirect ke domain berbeda: ${redirectDomain} != ${originalDomain}`);
-                    return { blocked: true }; // Redirect ke domain berbeda dianggap diblokir
-                } else {
-                    console.log(`Redirect ke subdomain yang sama: ${redirectDomain} == ${originalDomain}`);
-                    return { blocked: false }; // Redirect ke subdomain yang sama dianggap aman
-                }
+            // Cek jika redirect mengarah ke domain yang berbeda (bukan hanya subdomain)
+            if (redirectDomain !== originalDomain) {
+                console.log(`Redirect ke domain berbeda: ${redirectDomain} != ${originalDomain}`);
+                return { blocked: true }; // Redirect ke domain berbeda dianggap diblokir
             } else {
-                console.log(`Status ${response.status} tanpa header Location.`);
-                return { blocked: true }; // Tidak ada header Location, dianggap terblokir
+                console.log(`Redirect ke subdomain yang sama: ${redirectDomain} == ${originalDomain}`);
+                return { blocked: false }; // Redirect ke subdomain yang sama dianggap aman
             }
         } else if (response.status === 403) {
             console.log(`URL mengembalikan 403: ${urlToCheck}`);
@@ -68,10 +72,7 @@ async function checkURL(urlToCheck) {
 app.get('/check', async (req, res) => {
     const domain = req.query.domain || req.query.domains;
 
-    console.log(`Menerima permintaan pengecekan untuk domain: ${domain}`);
-
     if (!domain) {
-        console.log('Parameter "domain" atau "domains" tidak disediakan.');
         return res.status(400).json({ error: 'Parameter "domain" atau "domains" harus disediakan.' });
     }
 
@@ -85,8 +86,6 @@ app.get('/check', async (req, res) => {
 
     // Kirim hasil dalam format JSON
     res.json(response);
-
-    console.log(`Mengirim respons untuk ${domain}: ${JSON.stringify(response)}`);
 });
 
 // Menjalankan server di port 3000
