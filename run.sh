@@ -34,5 +34,5 @@ echo "Menginstal paket Node.js..."
 npm install
 
 # Jalankan skrip Node.js
-echo "Menjalankan provider.js..."
+echo "Menjalankan prov.js..."
 node prov.js
