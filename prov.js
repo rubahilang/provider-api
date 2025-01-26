@@ -60,11 +60,11 @@ async function checkURL(urlToCheck) {
             return { blocked: false }; // Tidak ada masalah, URL aman
         } else {
             console.log(`URL tidak tersedia (status ${response.status}): ${urlToCheck}`);
-            return { blocked: true }; // URL tidak tersedia, dianggap terblokir
+            return { blocked: false }; // URL tidak tersedia, dianggap terblokir
         }
     } catch (error) {
         console.log(`Terjadi kesalahan saat memeriksa ${urlToCheck}: ${error.message}`);
-        return { blocked: true }; // Terjadi kesalahan, dianggap terblokir
+        return { blocked: false }; // Terjadi kesalahan, dianggap terblokir
     }
 }
 
