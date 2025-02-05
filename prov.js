@@ -64,7 +64,7 @@ async function checkURL(urlToCheck) {
         }
     } catch (error) {
         console.log(`Terjadi kesalahan saat memeriksa ${urlToCheck}: ${error.message}`);
-        return { blocked: false }; // Terjadi kesalahan, dianggap terblokir
+        return { blocked: true }; // Terjadi kesalahan, dianggap terblokir
     }
 }
 
